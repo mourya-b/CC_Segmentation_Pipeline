@@ -1,0 +1,24 @@
+data:
+  base_dir: "C:/Users/moury/OneDrive/Desktop/RADBOUD/THESIS/Data/PECTUS-DICOMS"
+  zarr_dir: "Z:/CARAlab_datasets/PECTUS-rgb-zarr"
+  annotation_excel: "C:/Users/moury/OneDrive/Desktop/RADBOUD/THESIS/Data/CC_Annotations_M.xlsx"
+  image_size: 512
+
+model:
+  backbone: "efficientnet_b0"
+  num_classes: 2
+  pretrained: true
+
+training:
+  epochs: 50
+  batch_size: 8
+  learning_rate: 0.0001
+  val_split: 0.2
+  seed: 42
+
+loss:
+  type: "focal"
+  gamma: 2.0
+  alpha: 0.75
+
+output_dir: "outputs/classifier"

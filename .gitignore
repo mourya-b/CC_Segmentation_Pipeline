@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+*.env
+conda-env/
+
+# Data — never commit data
+*.dcm
+*.nii
+*.nii.gz
+*.zarr
+data/
+
+# Outputs / checkpoints
+outputs/
+checkpoints/
+runs/
+*.pt
+*.pth
+*.ckpt
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
