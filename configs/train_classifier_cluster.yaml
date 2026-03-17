@@ -1,0 +1,24 @@
+data:
+  base_dir: "/data/diag/mouryaBandaru/data/segmentations"
+  zarr_dir: "/data/diag/CARAlab_datasets/PECTUS-rgb-zarr"
+  annotation_excel: "/data/diag/mouryaBandaru/data/CC_Annotations_M.xlsx"
+  image_size: 512
+
+model:
+  backbone: "efficientnet_b0"
+  num_classes: 2
+  pretrained: true
+
+training:
+  epochs: 50
+  batch_size: 16
+  learning_rate: 0.0001
+  val_split: 0.2
+  seed: 42
+
+loss:
+  type: "focal"
+  gamma: 2.0
+  alpha: 0.75
+
+output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v1"
