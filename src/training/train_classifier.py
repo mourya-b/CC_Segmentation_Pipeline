@@ -12,7 +12,7 @@ from src.dataset.oct_cc_dataset import OCTFrameDataset
 from src.models.classifier import CCClassifier
 from src.utils.io import load_annotation_excel
 
-
+import argparse
 def load_config(config_path):
     with open(config_path) as f:
         return yaml.safe_load(f)
@@ -62,7 +62,10 @@ def evaluate(model, loader, criterion, device):
 
 
 def main():
-    config = load_config("configs/train_classifier.yaml")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/train_classifier.yaml")
+    args = parser.parse_args()
+    config = load_config(args.config)
     torch.manual_seed(config["training"]["seed"])
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
