@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir \
     nibabel==5.2.1 \
     pydicom==2.4.4 \
     SimpleITK==2.3.1 \
-    zarr==2.17.2 \
+    zarr==3.0.0a5 \
     pandas==2.2.1 \
     openpyxl==3.1.2 \
     PyYAML==6.0.1
