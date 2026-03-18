@@ -58,7 +58,7 @@ class OCTFrameDataset(Dataset):
     def __getitem__(self, idx):
         zarr_path, nii_path, frame_idx, label = self.samples[idx]
 
-        z = zarr.open(str(zarr_path), mode='r')
+        z = zarr.open_group(str(zarr_path), mode='r')
         image = z['data'][frame_idx]  # (3, H, W)
         image = np.transpose(image, (1, 2, 0))  # -> (H, W, 3)
 
