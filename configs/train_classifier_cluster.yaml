@@ -1,6 +1,6 @@
 data:
   base_dir: "/data/diag/mouryaBandaru/data/segmentations"
-  zarr_dir: "/data/diag/CARAlab_datasets/PECTUS-rgb-zarr"
+  dicom_dir: "/data/diag/rubenvdw/Dataset/DICOMS_Pectus"
   annotation_excel: "/data/diag/mouryaBandaru/data/CC_Annotations_M.xlsx"
   image_size: 512
 

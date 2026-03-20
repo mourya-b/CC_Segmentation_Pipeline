@@ -75,8 +75,8 @@ def main():
     patient_ids, cc_frames_map, negative_frames_map = load_annotation_excel(excel_path)
     patient_dirs = get_patient_dirs(config["data"]["base_dir"], patient_ids)
 
-    zarr_dir = Path(config["data"]["zarr_dir"])
-    dataset = OCTFrameDataset(zarr_dir, patient_dirs, negative_frames_map=negative_frames_map)
+    dicom_dir = Path(config["data"]["dicom_dir"])
+    dataset = OCTFrameDataset(dicom_dir, patient_dirs, negative_frames_map=negative_frames_map)
 
     val_size = int(len(dataset) * config["training"]["val_split"])
     train_size = len(dataset) - val_size
