@@ -51,8 +51,7 @@ class OCTFrameDataset(Dataset):
         key = str(dcm_path)
         if key not in self.volume_cache:
             dcm = pydicom.dcmread(str(dcm_path))
-            volume = dcm.pixel_array  # (N, H, W)
-            self.volume_cache[key] = volume
+            self.volume_cache[key] = dcm.pixel_array  # (N, H, W, 3)
         return self.volume_cache[key]
 
     def __len__(self):
@@ -62,8 +61,7 @@ class OCTFrameDataset(Dataset):
         dcm_path, nii_path, frame_idx, label = self.samples[idx]
 
         volume = self._load_volume(dcm_path)
-        frame = volume[frame_idx]  # (H, W)
-        image = np.stack([frame, frame, frame], axis=-1)  # (H, W, 3)
+        image = volume[frame_idx]  # (H, W, 3) already RGB
 
         if self.transform:
             augmented = self.transform(image=image)
