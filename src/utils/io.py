@@ -1,19 +1,13 @@
 import pydicom
 import nibabel as nib
 import numpy as np
-import zarr
+import pandas as pd
 
 def load_dicom_volume(dcm_path):
     """Load a multi-frame DICOM and return array of shape (N, H, W)."""
     dcm = pydicom.dcmread(dcm_path)
     pixel_array = dcm.pixel_array  # shape: (N, H, W)
     return pixel_array
-
-def load_zarr_volume(zarr_path):
-    """Load a Zarr volume and return array of shape (N, H, W, 3)."""
-    z = zarr.open(str(zarr_path), mode='r')
-    volume = z['data']  # (N, 3, H, W)
-    return volume  # keep as zarr array for lazy loading
 
 def load_segmentation(nii_path):
     """Load a .nii.gz segmentation and return array of shape (N, H, W), aligned to DICOM orientation."""
@@ -46,7 +40,7 @@ def parse_frame_list(cell_value):
 
 
 def parse_macrophage_ranges(cell_value):
-    """Parse macrophage range strings like '363-388, 106-110' into 0-indexed frame lists."""
+    """Parsing macrophage range strings like '363-388, 106-110' into 0-indexed frame lists."""
     if not cell_value or str(cell_value).strip() == "":
         return []
     result = []
