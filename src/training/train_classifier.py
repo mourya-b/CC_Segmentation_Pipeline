@@ -10,7 +10,7 @@ from tqdm import tqdm
 import random
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-
+from src.training.losses import FocalLoss
 from src.dataset.oct_cc_dataset import OCTFrameDataset
 from src.models.classifier import CCClassifier
 from src.utils.io import load_annotation_excel
@@ -85,6 +85,15 @@ def evaluate(model, loader, criterion, device):
             total += labels.size(0)
     return total_loss / len(loader), correct / total
 
+def get_criterion(config):
+    loss_cfg = config.get("loss", {})
+    loss_type = loss_cfg.get("type", "cross_entropy")
+    if loss_type == "focal":
+        return FocalLoss(
+            alpha=loss_cfg.get("alpha", 0.75),
+            gamma=loss_cfg.get("gamma", 2.0)
+        )
+    return nn.CrossEntropyLoss()
 
 def main():
     parser = argparse.ArgumentParser()
@@ -105,7 +114,7 @@ def main():
 
     # Patient-level split
     random.shuffle(patient_dirs)
-    val_size = max(1, int(len(patient_dirs) * config["training"]["val_split"]))
+    val_size = max(3, int(len(patient_dirs) * config["training"]["val_split"]))
     val_patient_dirs = patient_dirs[:val_size]
     train_patient_dirs = patient_dirs[val_size:]
 
@@ -135,7 +144,8 @@ def main():
         pretrained=config["model"]["pretrained"]
     ).to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = get_criterion(config)
+    print(f"Using loss: {config.get('loss', {}).get('type', 'cross_entropy')}")
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=config["training"]["learning_rate"],
