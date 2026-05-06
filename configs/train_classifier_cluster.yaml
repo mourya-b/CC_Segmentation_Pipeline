@@ -1,7 +1,10 @@
 data:
-  base_dir: "/data/diag/mouryaBandaru/data/segmentations"
-  dicom_dir: "/data/diag/rubenvdw/Dataset/DICOMS_Pectus"
-  annotation_excel: "/data/diag/mouryaBandaru/data/CC_Annotations_M.xlsx"
+  sources:
+    - base_dir: "/data/diag/mouryaBandaru/data/PECTUS_segmentations"
+      dicom_dir: "/data/diag/rubenvdw/Dataset/DICOMS_Pectus"
+    - base_dir: "/data/diag/mouryaBandaru/data/ORANGE_segmentations"
+      dicom_dir: "/data/diag/rubenvdw/Dataset/ORANGE_Dicoms"
+  annotation_excel: "/data/diag/mouryaBandaru/data/CC_Annotations_v3.xlsx"
   image_size: 512
 
 model:
@@ -23,4 +26,4 @@ loss:
   gamma: 2.0
   alpha: 0.75
 
-output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v1"
+output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v4"

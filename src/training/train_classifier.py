@@ -23,17 +23,27 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
-def get_patient_dirs(base_dir, patient_ids):
-    base_dir = Path(base_dir)
-    dirs = []
+def get_patient_dirs(sources, patient_ids):
+    """
+    Search all source base_dirs for each patient and return
+    list of (patient_dir, dicom_dir) tuples.
+    """
+    results = []
     for pid in patient_ids:
         hospital = "-".join(pid.split("-")[:2])
-        patient_path = base_dir / hospital / pid
-        if patient_path.exists():
-            dirs.append(patient_path)
-        else:
-            print(f"Warning: {patient_path} not found, skipping.")
-    return dirs
+        found = False
+        for source in sources:
+            base_dir = Path(source["base_dir"])
+            dicom_dir = Path(source["dicom_dir"])
+            patient_path = base_dir / hospital / pid
+            dcm_path = dicom_dir / f"{pid}.dcm"
+            if patient_path.exists() and dcm_path.exists():
+                results.append((patient_path, dicom_dir))
+                found = True
+                break
+        if not found:
+            print(f"Warning: {pid} not found in any source, skipping.")
+    return results
 
 
 def get_transforms(train=True, image_size=512):
@@ -54,6 +64,37 @@ def get_transforms(train=True, image_size=512):
             A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             ToTensorV2(),
         ])
+
+
+def build_dataset(patient_dirs_with_dicoms, negative_frames_map, transform):
+    """
+    Build dataset handling multiple dicom_dirs per patient.
+    Groups patients by dicom_dir and creates one dataset per group,
+    then concatenates.
+    """
+    from torch.utils.data import ConcatDataset
+
+    # Group by dicom_dir
+    groups = {}
+    for patient_dir, dicom_dir in patient_dirs_with_dicoms:
+        key = str(dicom_dir)
+        if key not in groups:
+            groups[key] = {"dicom_dir": dicom_dir, "patient_dirs": []}
+        groups[key]["patient_dirs"].append(patient_dir)
+
+    datasets = []
+    for key, group in groups.items():
+        ds = OCTFrameDataset(
+            dicom_dir=group["dicom_dir"],
+            patient_dirs=group["patient_dirs"],
+            negative_frames_map=negative_frames_map,
+            transform=transform,
+        )
+        datasets.append(ds)
+
+    if len(datasets) == 1:
+        return datasets[0]
+    return ConcatDataset(datasets)
 
 
 def train_one_epoch(model, loader, optimizer, criterion, device):
@@ -85,6 +126,7 @@ def evaluate(model, loader, criterion, device):
             total += labels.size(0)
     return total_loss / len(loader), correct / total
 
+
 def get_criterion(config):
     loss_cfg = config.get("loss", {})
     loss_type = loss_cfg.get("type", "cross_entropy")
@@ -94,6 +136,7 @@ def get_criterion(config):
             gamma=loss_cfg.get("gamma", 2.0)
         )
     return nn.CrossEntropyLoss()
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -110,30 +153,25 @@ def main():
 
     excel_path = Path(config["data"]["annotation_excel"])
     patient_ids, cc_frames_map, negative_frames_map = load_annotation_excel(excel_path)
-    patient_dirs = get_patient_dirs(config["data"]["base_dir"], patient_ids)
+
+    sources = config["data"]["sources"]
+    all_patient_dirs = get_patient_dirs(sources, patient_ids)
+
+    print(f"Found {len(all_patient_dirs)} usable patients out of {len(patient_ids)}")
 
     # Patient-level split
-    random.shuffle(patient_dirs)
-    val_size = max(3, int(len(patient_dirs) * config["training"]["val_split"]))
-    val_patient_dirs = patient_dirs[:val_size]
-    train_patient_dirs = patient_dirs[val_size:]
+    random.shuffle(all_patient_dirs)
+    val_size = max(3, int(len(all_patient_dirs) * config["training"]["val_split"]))
+    val_patient_dirs = all_patient_dirs[:val_size]
+    train_patient_dirs = all_patient_dirs[val_size:]
 
-    print(f"Train patients ({len(train_patient_dirs)}): {[p.name for p in train_patient_dirs]}")
-    print(f"Val patients ({len(val_patient_dirs)}): {[p.name for p in val_patient_dirs]}")
+    print(f"Train patients ({len(train_patient_dirs)}): {[p.name for p, _ in train_patient_dirs]}")
+    print(f"Val patients ({len(val_patient_dirs)}): {[p.name for p, _ in val_patient_dirs]}")
 
     image_size = config["data"].get("image_size", 512)
-    dicom_dir = Path(config["data"]["dicom_dir"])
 
-    train_set = OCTFrameDataset(
-        dicom_dir, train_patient_dirs,
-        negative_frames_map=negative_frames_map,
-        transform=get_transforms(train=True, image_size=image_size)
-    )
-    val_set = OCTFrameDataset(
-        dicom_dir, val_patient_dirs,
-        negative_frames_map=negative_frames_map,
-        transform=get_transforms(train=False, image_size=image_size)
-    )
+    train_set = build_dataset(train_patient_dirs, negative_frames_map, get_transforms(True, image_size))
+    val_set = build_dataset(val_patient_dirs, negative_frames_map, get_transforms(False, image_size))
 
     train_loader = DataLoader(train_set, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=4)
     val_loader = DataLoader(val_set, batch_size=config["training"]["batch_size"], shuffle=False, num_workers=4)
@@ -146,6 +184,7 @@ def main():
 
     criterion = get_criterion(config)
     print(f"Using loss: {config.get('loss', {}).get('type', 'cross_entropy')}")
+
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=config["training"]["learning_rate"],
@@ -178,8 +217,8 @@ def main():
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_loss": val_loss,
                 "val_acc": val_acc,
-                "train_patients": [p.name for p in train_patient_dirs],
-                "val_patients": [p.name for p in val_patient_dirs],
+                "train_patients": [p.name for p, _ in train_patient_dirs],
+                "val_patients": [p.name for p, _ in val_patient_dirs],
             }, output_dir / "best_classifier.pth")
             print("Model saved.")
         else:
