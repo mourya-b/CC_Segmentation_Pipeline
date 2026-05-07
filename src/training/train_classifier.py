@@ -160,10 +160,16 @@ def main():
     print(f"Found {len(all_patient_dirs)} usable patients out of {len(patient_ids)}")
 
     # Patient-level split
-    random.shuffle(all_patient_dirs)
-    val_size = max(3, int(len(all_patient_dirs) * config["training"]["val_split"]))
-    val_patient_dirs = all_patient_dirs[:val_size]
-    train_patient_dirs = all_patient_dirs[val_size:]
+    explicit_val = config["training"].get("val_patients", None)
+    if explicit_val:
+        val_patient_dirs = [(p, d) for p, d in all_patient_dirs if p.name in explicit_val]
+        train_patient_dirs = [(p, d) for p, d in all_patient_dirs if p.name not in explicit_val]
+        print(f"Using explicit val set from config")
+    else:
+        random.shuffle(all_patient_dirs)
+        val_size = max(3, int(len(all_patient_dirs) * config["training"]["val_split"]))
+        val_patient_dirs = all_patient_dirs[:val_size]
+        train_patient_dirs = all_patient_dirs[val_size:]
 
     print(f"Train patients ({len(train_patient_dirs)}): {[p.name for p, _ in train_patient_dirs]}")
     print(f"Val patients ({len(val_patient_dirs)}): {[p.name for p, _ in val_patient_dirs]}")
