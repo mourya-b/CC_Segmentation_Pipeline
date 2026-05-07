@@ -30,6 +30,9 @@ def get_patient_dirs(sources, patient_ids):
     """
     results = []
     for pid in patient_ids:
+        pid = str(pid).strip()
+        if not pid or pid == 'nan':
+            continue
         hospital = "-".join(pid.split("-")[:2])
         found = False
         for source in sources:
