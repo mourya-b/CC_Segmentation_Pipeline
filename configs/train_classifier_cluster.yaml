@@ -27,6 +27,9 @@ training:
     - "NL-RUMC-00033-1-1"
     - "NLD-ISALA-0012"
     - "ABW-ARU-0013"
+  freeze_epochs: 10
+  unfreeze_blocks: 3
+  backbone_lr_scale: 0.1
 
 loss:
   type: "focal"

@@ -24,10 +24,6 @@ def load_config(config_path):
 
 
 def get_patient_dirs(sources, patient_ids):
-    """
-    Search all source base_dirs for each patient and return
-    list of (patient_dir, dicom_dir) tuples.
-    """
     results = []
     for pid in patient_ids:
         pid = str(pid).strip()
@@ -70,14 +66,8 @@ def get_transforms(train=True, image_size=512):
 
 
 def build_dataset(patient_dirs_with_dicoms, negative_frames_map, transform):
-    """
-    Build dataset handling multiple dicom_dirs per patient.
-    Groups patients by dicom_dir and creates one dataset per group,
-    then concatenates.
-    """
     from torch.utils.data import ConcatDataset
 
-    # Group by dicom_dir
     groups = {}
     for patient_dir, dicom_dir in patient_dirs_with_dicoms:
         key = str(dicom_dir)
@@ -98,6 +88,59 @@ def build_dataset(patient_dirs_with_dicoms, negative_frames_map, transform):
     if len(datasets) == 1:
         return datasets[0]
     return ConcatDataset(datasets)
+
+
+def freeze_backbone(model):
+    """Freeze all layers except the classifier head."""
+    for name, param in model.model.named_parameters():
+        if "classifier" not in name:
+            param.requires_grad = False
+    print("Backbone frozen — training classifier head only.")
+
+
+def unfreeze_last_blocks(model, num_blocks=3, lr_backbone=1e-5):
+    """Unfreeze last N blocks of EfficientNet backbone."""
+    for param in model.model.parameters():
+        param.requires_grad = False
+
+    # Unfreeze classifier head
+    for param in model.model.classifier.parameters():
+        param.requires_grad = True
+
+    # Unfreeze last num_blocks blocks
+    blocks = list(model.model.blocks.children())
+    for block in blocks[-num_blocks:]:
+        for param in block.parameters():
+            param.requires_grad = True
+
+    # Also unfreeze conv_head and bn2
+    for param in model.model.conv_head.parameters():
+        param.requires_grad = True
+    for param in model.model.bn2.parameters():
+        param.requires_grad = True
+
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Unfroze last {num_blocks} blocks + head. Trainable params: {trainable:,}")
+
+
+def get_optimizer(model, config, backbone_lr_scale=0.1):
+    """
+    Separate param groups for backbone and head
+    so backbone gets a lower LR when unfrozen.
+    """
+    base_lr = config["training"]["learning_rate"]
+    wd = config["training"].get("weight_decay", 1e-4)
+
+    head_params = [p for n, p in model.model.named_parameters()
+                   if p.requires_grad and "classifier" in n]
+    backbone_params = [p for n, p in model.model.named_parameters()
+                       if p.requires_grad and "classifier" not in n]
+
+    param_groups = [
+        {"params": head_params, "lr": base_lr},
+        {"params": backbone_params, "lr": base_lr * backbone_lr_scale},
+    ]
+    return torch.optim.Adam(param_groups, weight_decay=wd)
 
 
 def train_one_epoch(model, loader, optimizer, criterion, device):
@@ -159,7 +202,6 @@ def main():
 
     sources = config["data"]["sources"]
     all_patient_dirs = get_patient_dirs(sources, patient_ids)
-
     print(f"Found {len(all_patient_dirs)} usable patients out of {len(patient_ids)}")
 
     # Patient-level split
@@ -182,8 +224,11 @@ def main():
     train_set = build_dataset(train_patient_dirs, negative_frames_map, get_transforms(True, image_size))
     val_set = build_dataset(val_patient_dirs, negative_frames_map, get_transforms(False, image_size))
 
-    train_loader = DataLoader(train_set, batch_size=config["training"]["batch_size"], shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_set, batch_size=config["training"]["batch_size"], shuffle=False, num_workers=4)
+    # num_workers=0 — single process, shared DICOM cache, consistent speed
+    train_loader = DataLoader(train_set, batch_size=config["training"]["batch_size"],
+                              shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_set, batch_size=config["training"]["batch_size"],
+                            shuffle=False, num_workers=0)
 
     model = CCClassifier(
         backbone=config["model"]["backbone"],
@@ -194,8 +239,15 @@ def main():
     criterion = get_criterion(config)
     print(f"Using loss: {config.get('loss', {}).get('type', 'cross_entropy')}")
 
+    # Staged fine-tuning config
+    freeze_epochs = config["training"].get("freeze_epochs", 10)
+    unfreeze_blocks = config["training"].get("unfreeze_blocks", 3)
+    backbone_lr_scale = config["training"].get("backbone_lr_scale", 0.1)
+
+    # Phase 1 — freeze backbone, train head only
+    freeze_backbone(model)
     optimizer = torch.optim.Adam(
-        model.parameters(),
+        filter(lambda p: p.requires_grad, model.parameters()),
         lr=config["training"]["learning_rate"],
         weight_decay=config["training"].get("weight_decay", 1e-4)
     )
@@ -207,13 +259,23 @@ def main():
     best_val_loss = float("inf")
     patience = config["training"].get("early_stopping_patience", 10)
     epochs_no_improve = 0
+    phase = 1
 
     for epoch in range(config["training"]["epochs"]):
+
+        # Switch to Phase 2 after freeze_epochs
+        if epoch == freeze_epochs and phase == 1:
+            print(f"\n--- Epoch {epoch+1}: Switching to Phase 2 — unfreezing last {unfreeze_blocks} blocks ---")
+            unfreeze_last_blocks(model, num_blocks=unfreeze_blocks)
+            optimizer = get_optimizer(model, config, backbone_lr_scale)
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=5, factor=0.5)
+            phase = 2
+
         train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
         scheduler.step(val_loss)
 
-        print(f"Epoch {epoch+1}/{config['training']['epochs']} "
+        print(f"Epoch {epoch+1}/{config['training']['epochs']} [Phase {phase}] "
               f"| Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} "
               f"| Val Loss: {val_loss:.4f} Acc: {val_acc:.4f}")
 
