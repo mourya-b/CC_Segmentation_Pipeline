@@ -3,26 +3,64 @@ import yaml
 import numpy as np
 import torch
 from pathlib import Path
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, ConcatDataset
 from sklearn.metrics import (
     precision_score, recall_score, f1_score,
     roc_auc_score, confusion_matrix, classification_report
 )
+from albumentations import Compose, Resize, Normalize
+from albumentations.pytorch import ToTensorV2
 
 from src.models.classifier import CCClassifier
 from src.dataset.oct_cc_dataset import OCTFrameDataset
 from src.utils.io import load_annotation_excel
 
 
-def get_patient_dirs(base_dir, patient_ids):
-    dirs = []
-    base_dir = Path(base_dir)
-    for pid in patient_ids:
+def get_val_patient_dirs(sources, val_patient_names):
+    """Find val patient dirs and their corresponding dicom_dir across all sources."""
+    results = []
+    for pid in val_patient_names:
+        pid = str(pid).strip()
+        if not pid or pid == 'nan':
+            continue
         hospital = "-".join(pid.split("-")[:2])
-        p = base_dir / hospital / pid
-        if p.exists():
-            dirs.append(p)
-    return dirs
+        found = False
+        for source in sources:
+            base_dir = Path(source["base_dir"])
+            dicom_dir = Path(source["dicom_dir"])
+            patient_path = base_dir / hospital / pid
+            dcm_path = dicom_dir / f"{pid}.dcm"
+            if patient_path.exists() and dcm_path.exists():
+                results.append((patient_path, dicom_dir))
+                found = True
+                break
+        if not found:
+            print(f"Warning: val patient {pid} not found in any source")
+    return results
+
+
+def build_val_dataset(val_patient_dirs_with_dicoms, negative_frames_map, transform):
+    """Build val dataset handling multiple dicom sources."""
+    groups = {}
+    for patient_dir, dicom_dir in val_patient_dirs_with_dicoms:
+        key = str(dicom_dir)
+        if key not in groups:
+            groups[key] = {"dicom_dir": dicom_dir, "patient_dirs": []}
+        groups[key]["patient_dirs"].append(patient_dir)
+
+    datasets = []
+    for key, group in groups.items():
+        ds = OCTFrameDataset(
+            dicom_dir=group["dicom_dir"],
+            patient_dirs=group["patient_dirs"],
+            negative_frames_map=negative_frames_map,
+            transform=transform,
+        )
+        datasets.append(ds)
+
+    if len(datasets) == 1:
+        return datasets[0]
+    return ConcatDataset(datasets)
 
 
 def main():
@@ -38,10 +76,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(args.checkpoint, map_location=device)
 
-    # Load val patients from checkpoint
     val_patient_names = checkpoint.get("val_patients", None)
     if val_patient_names is None:
-        print("ERROR: checkpoint does not contain val_patients. Cannot reproduce val split.")
+        print("ERROR: checkpoint does not contain val_patients.")
         return
 
     print(f"Val patients from checkpoint: {val_patient_names}")
@@ -51,38 +88,25 @@ def main():
         cfg["data"]["annotation_excel"]
     )
 
-    # Build val patient dirs from checkpoint val_patients
-    base_dir = Path(cfg["data"]["base_dir"])
-    val_patient_dirs = []
-    for pid in val_patient_names:
-        hospital = "-".join(pid.split("-")[:2])
-        p = base_dir / hospital / pid
-        if p.exists():
-            val_patient_dirs.append(p)
-        else:
-            print(f"Warning: val patient dir not found: {p}")
+    # Find val patient dirs across all sources
+    sources = cfg["data"]["sources"]
+    val_patient_dirs = get_val_patient_dirs(sources, val_patient_names)
 
-    # Build val dataset using only val patients
-    from albumentations import Compose, Resize, Normalize
-    from albumentations.pytorch import ToTensorV2
+    # Build val transform
+    image_size = cfg["data"].get("image_size", 512)
     val_transform = Compose([
-        Resize(cfg["data"].get("image_size", 512), cfg["data"].get("image_size", 512)),
+        Resize(image_size, image_size),
         Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
         ToTensorV2(),
     ])
 
-    val_set = OCTFrameDataset(
-        dicom_dir=cfg["data"]["dicom_dir"],
-        patient_dirs=val_patient_dirs,
-        negative_frames_map=negative_frames_map,
-        transform=val_transform,
-    )
+    val_set = build_val_dataset(val_patient_dirs, negative_frames_map, val_transform)
 
     val_loader = DataLoader(
         val_set,
         batch_size=cfg["training"]["batch_size"],
         shuffle=False,
-        num_workers=2,
+        num_workers=0,
     )
 
     # Load model
