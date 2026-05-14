@@ -34,6 +34,6 @@ training:
 loss:
   type: "focal"
   gamma: 2.0
-  alpha: 0.75
+  alpha: 0.5
 
 output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v6"
