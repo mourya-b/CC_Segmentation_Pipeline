@@ -16,7 +16,7 @@ from src.models.classifier import CCClassifier
 from src.utils.io import load_annotation_excel
 
 import argparse
-from torch.utils.data import WeightedRandomSampler
+
 
 def load_config(config_path):
     with open(config_path) as f:
@@ -224,32 +224,12 @@ def main():
     train_set = build_dataset(train_patient_dirs, negative_frames_map, get_transforms(True, image_size))
     val_set = build_dataset(val_patient_dirs, negative_frames_map, get_transforms(False, image_size))
 
-# Weighted sampler to oversample positive frames
-
-    def get_sample_weights(dataset):
-        """Get per-sample weights for balanced sampling."""
-        from torch.utils.data import ConcatDataset
-        if isinstance(dataset, ConcatDataset):
-            samples = []
-            for ds in dataset.datasets:
-                samples.extend(ds.samples)
-        else:
-            samples = dataset.samples
-        labels = [s[3] for s in samples]
-        class_counts = [labels.count(0), labels.count(1)]
-        weights = [1.0 / class_counts[l] for l in labels]
-        return weights
-
-    sample_weights = get_sample_weights(train_set)
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True
-    )
+    # num_workers=0 — single process, shared DICOM cache, consistent speed
     train_loader = DataLoader(train_set, batch_size=config["training"]["batch_size"],
-                            shuffle=False, num_workers=0, sampler=sampler)
+                              shuffle=True, num_workers=0)
     val_loader = DataLoader(val_set, batch_size=config["training"]["batch_size"],
                             shuffle=False, num_workers=0)
+
     model = CCClassifier(
         backbone=config["model"]["backbone"],
         num_classes=config["model"]["num_classes"],
