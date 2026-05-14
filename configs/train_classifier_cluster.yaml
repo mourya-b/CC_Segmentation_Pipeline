@@ -13,12 +13,10 @@ model:
   pretrained: true
 
 training:
-  epochs: 50
-  batch_size: 16
-  learning_rate: 0.0001
-  val_split: 0.2
-  seed: 42
-  weight_decay: 0.0001
+  epochs: 60
+  freeze_epochs: 15
+  unfreeze_blocks: 7
+  backbone_lr_scale: 0.01
   early_stopping_patience: 10
   val_patients:
     - "NLD-RADB-0060"

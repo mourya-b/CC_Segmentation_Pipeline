@@ -14,7 +14,6 @@ from src.training.losses import FocalLoss
 from src.dataset.oct_cc_dataset import OCTFrameDataset
 from src.models.classifier import CCClassifier
 from src.utils.io import load_annotation_excel
-
 import argparse
 
 
@@ -91,43 +90,48 @@ def build_dataset(patient_dirs_with_dicoms, negative_frames_map, transform):
 
 
 def freeze_backbone(model):
-    """Freeze all layers except the classifier head."""
     for name, param in model.model.named_parameters():
         if "classifier" not in name:
             param.requires_grad = False
     print("Backbone frozen — training classifier head only.")
 
 
-def unfreeze_last_blocks(model, num_blocks=3, lr_backbone=1e-5):
-    """Unfreeze last N blocks of EfficientNet backbone."""
+def unfreeze_last_blocks(model, num_blocks=7):
+    """Unfreeze last N blocks. If num_blocks >= total blocks, unfreeze all."""
     for param in model.model.parameters():
         param.requires_grad = False
 
-    # Unfreeze classifier head
+    # Always unfreeze classifier head
     for param in model.model.classifier.parameters():
         param.requires_grad = True
 
-    # Unfreeze last num_blocks blocks
-    blocks = list(model.model.blocks.children())
-    for block in blocks[-num_blocks:]:
-        for param in block.parameters():
-            param.requires_grad = True
-
-    # Also unfreeze conv_head and bn2
+    # Unfreeze conv_head and bn2
     for param in model.model.conv_head.parameters():
         param.requires_grad = True
     for param in model.model.bn2.parameters():
         param.requires_grad = True
 
+    # Unfreeze blocks
+    blocks = list(model.model.blocks.children())
+    total_blocks = len(blocks)
+    blocks_to_unfreeze = blocks[-num_blocks:] if num_blocks < total_blocks else blocks
+    for block in blocks_to_unfreeze:
+        for param in block.parameters():
+            param.requires_grad = True
+
+    # If unfreezing all, also unfreeze conv_stem and bn1
+    if num_blocks >= total_blocks:
+        for param in model.model.conv_stem.parameters():
+            param.requires_grad = True
+        for param in model.model.bn1.parameters():
+            param.requires_grad = True
+
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Unfroze last {num_blocks} blocks + head. Trainable params: {trainable:,}")
+    blocks_unfrozen = min(num_blocks, total_blocks)
+    print(f"Unfroze {blocks_unfrozen}/{total_blocks} blocks + head. Trainable params: {trainable:,}")
 
 
 def get_optimizer(model, config, backbone_lr_scale=0.1):
-    """
-    Separate param groups for backbone and head
-    so backbone gets a lower LR when unfrozen.
-    """
     base_lr = config["training"]["learning_rate"]
     wd = config["training"].get("weight_decay", 1e-4)
 
@@ -224,7 +228,6 @@ def main():
     train_set = build_dataset(train_patient_dirs, negative_frames_map, get_transforms(True, image_size))
     val_set = build_dataset(val_patient_dirs, negative_frames_map, get_transforms(False, image_size))
 
-    # num_workers=0 — single process, shared DICOM cache, consistent speed
     train_loader = DataLoader(train_set, batch_size=config["training"]["batch_size"],
                               shuffle=True, num_workers=0)
     val_loader = DataLoader(val_set, batch_size=config["training"]["batch_size"],
@@ -239,19 +242,21 @@ def main():
     criterion = get_criterion(config)
     print(f"Using loss: {config.get('loss', {}).get('type', 'cross_entropy')}")
 
-    # Staged fine-tuning config
-    freeze_epochs = config["training"].get("freeze_epochs", 10)
-    unfreeze_blocks = config["training"].get("unfreeze_blocks", 3)
-    backbone_lr_scale = config["training"].get("backbone_lr_scale", 0.1)
+    freeze_epochs = config["training"].get("freeze_epochs", 15)
+    unfreeze_blocks = config["training"].get("unfreeze_blocks", 7)
+    backbone_lr_scale = config["training"].get("backbone_lr_scale", 0.01)
+    total_epochs = config["training"]["epochs"]
 
-    # Phase 1 — freeze backbone, train head only
+    # Phase 1 — freeze backbone, ReduceLROnPlateau
     freeze_backbone(model)
     optimizer = torch.optim.Adam(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=config["training"]["learning_rate"],
         weight_decay=config["training"].get("weight_decay", 1e-4)
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=5, factor=0.5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", patience=5, factor=0.5
+    )
 
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -261,21 +266,30 @@ def main():
     epochs_no_improve = 0
     phase = 1
 
-    for epoch in range(config["training"]["epochs"]):
+    for epoch in range(total_epochs):
 
-        # Switch to Phase 2 after freeze_epochs
+        # Switch to Phase 2
         if epoch == freeze_epochs and phase == 1:
-            print(f"\n--- Epoch {epoch+1}: Switching to Phase 2 — unfreezing last {unfreeze_blocks} blocks ---")
+            print(f"\n--- Epoch {epoch+1}: Switching to Phase 2 — unfreezing {unfreeze_blocks} blocks ---")
             unfreeze_last_blocks(model, num_blocks=unfreeze_blocks)
             optimizer = get_optimizer(model, config, backbone_lr_scale)
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", patience=5, factor=0.5)
+            # CosineAnnealingLR for Phase 2
+            t_max = total_epochs - freeze_epochs
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=t_max, eta_min=1e-7
+            )
             phase = 2
 
         train_loss, train_acc = train_one_epoch(model, train_loader, optimizer, criterion, device)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
-        scheduler.step(val_loss)
 
-        print(f"Epoch {epoch+1}/{config['training']['epochs']} [Phase {phase}] "
+        # Step scheduler
+        if phase == 1:
+            scheduler.step(val_loss)
+        else:
+            scheduler.step()
+
+        print(f"Epoch {epoch+1}/{total_epochs} [Phase {phase}] "
               f"| Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} "
               f"| Val Loss: {val_loss:.4f} Acc: {val_acc:.4f}")
 
