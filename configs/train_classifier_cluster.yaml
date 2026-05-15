@@ -14,11 +14,15 @@ model:
 
 training:
   epochs: 60
+  batch_size: 16
+  learning_rate: 0.0001
+  val_split: 0.2
+  seed: 42
+  weight_decay: 0.0001
+  early_stopping_patience: 11
   freeze_epochs: 10
   unfreeze_blocks: 3
   backbone_lr_scale: 0.1
-  early_stopping_patience: 11
-  seed: 42
   val_patients:
     - "NLD-RADB-0060"
     - "NLD-AZN-0009"
@@ -26,9 +30,6 @@ training:
     - "NL-RUMC-00033-1-1"
     - "NLD-ISALA-0012"
     - "ABW-ARU-0013"
-  freeze_epochs: 10
-  unfreeze_blocks: 3
-  backbone_lr_scale: 0.1
 
 cv:
   n_folds: 5
