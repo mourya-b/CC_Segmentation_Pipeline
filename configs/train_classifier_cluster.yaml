@@ -14,10 +14,10 @@ model:
 
 training:
   epochs: 60
-  freeze_epochs: 15
-  unfreeze_blocks: 7
-  backbone_lr_scale: 0.01
-  early_stopping_patience: 10
+  freeze_epochs: 10
+  unfreeze_blocks: 3
+  backbone_lr_scale: 0.1
+  early_stopping_patience: 11
   seed: 42
   val_patients:
     - "NLD-RADB-0060"
@@ -41,4 +41,4 @@ loss:
   gamma: 2.0
   alpha: 0.75
 
-output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v8"
+output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v9"
