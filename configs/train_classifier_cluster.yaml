@@ -18,6 +18,7 @@ training:
   unfreeze_blocks: 7
   backbone_lr_scale: 0.01
   early_stopping_patience: 10
+  seed: 42
   val_patients:
     - "NLD-RADB-0060"
     - "NLD-AZN-0009"
@@ -28,6 +29,12 @@ training:
   freeze_epochs: 10
   unfreeze_blocks: 3
   backbone_lr_scale: 0.1
+
+cv:
+  n_folds: 5
+  pin_to_train:
+    - "NLD-TERG-0002"
+    - "NLD-UMCG-0001-LAD"
 
 loss:
   type: "focal"
