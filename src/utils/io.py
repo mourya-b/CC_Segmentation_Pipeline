@@ -74,6 +74,6 @@ def load_annotation_excel(excel_path):
         neg_frames = parse_frame_list(row["Frames_Negative"])
         macro_frames = parse_macrophage_ranges(row["Macrophages"])
         # combine negatives and hard negatives, remove duplicates
-        negative_frames_map[pid] = list(set(neg_frames + macro_frames))
+        negative_frames_map[pid] = neg_frames
 
     return list(df["Full_Filename"]), cc_frames_map, negative_frames_map
