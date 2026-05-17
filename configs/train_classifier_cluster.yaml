@@ -5,7 +5,7 @@ data:
     - base_dir: "/data/diag/mouryaBandaru/data/ORANGE_segmentations"
       dicom_dir: "/data/diag/rubenvdw/Dataset/ORANGE_Dicoms"
   annotation_excel: "/data/diag/mouryaBandaru/data/CC_Annotations_v3.xlsx"
-  image_size: 512
+  image_size: 704
 
 model:
   backbone: "efficientnet_b0"
