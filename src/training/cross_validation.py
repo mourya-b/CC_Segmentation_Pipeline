@@ -41,39 +41,62 @@ def get_positive_frame_count(patient_dir, cc_frames_map):
 
 def stratified_kfold_patients(patient_dirs, cc_frames_map, n_folds=5, seed=42):
     """
-    Split patients into n_folds stratified by positive frame count.
-    Returns list of (train_indices, val_indices) tuples.
+    Split patients into n_folds stratified by both positive frame count
+    and hospital site to prevent site imbalance across folds.
     """
     random.seed(seed)
 
-    # Get positive frame counts and sort into bins
-    counts = [(i, get_positive_frame_count(p, cc_frames_map)) for i, (p, d) in enumerate(patient_dirs)]
+    # Build patient info
+    patients = []
+    for i, (p, d) in enumerate(patient_dirs):
+        pid = p.name
+        hospital = "-".join(pid.split("-")[:2])
+        count = get_positive_frame_count(p, cc_frames_map)
+        patients.append({"idx": i, "pid": pid, "hospital": hospital, "count": count})
 
-    # Bin patients: high (>15), medium (5-15), low (1-5), zero (0)
-    bins = defaultdict(list)
-    for idx, count in counts:
-        if count == 0:
-            bins['zero'].append(idx)
-        elif count <= 5:
-            bins['low'].append(idx)
-        elif count <= 15:
-            bins['medium'].append(idx)
+    # Identify rare sites — sites with fewer patients than n_folds
+    from collections import Counter
+    site_counts = Counter(p["hospital"] for p in patients)
+    rare_sites = {site for site, cnt in site_counts.items() if cnt < n_folds}
+    print(f"\nRare sites (< {n_folds} patients): {rare_sites}")
+
+    # Separate rare site patients — distribute one per fold round-robin
+    rare_patients = [p for p in patients if p["hospital"] in rare_sites]
+    common_patients = [p for p in patients if p["hospital"] not in rare_sites]
+
+    # Shuffle rare patients by site then distribute
+    random.shuffle(rare_patients)
+    rare_folds = [[] for _ in range(n_folds)]
+    for i, p in enumerate(rare_patients):
+        rare_folds[i % n_folds].append(p["idx"])
+
+    # Stratify common patients by positive frame count bins
+    bins = {"zero": [], "low": [], "medium": [], "high": []}
+    for p in common_patients:
+        if p["count"] == 0:
+            bins["zero"].append(p["idx"])
+        elif p["count"] <= 5:
+            bins["low"].append(p["idx"])
+        elif p["count"] <= 15:
+            bins["medium"].append(p["idx"])
         else:
-            bins['high'].append(idx)
+            bins["high"].append(p["idx"])
 
-    print(f"\nStratification bins:")
+    print(f"Common patient bins:")
     for bin_name, idxs in bins.items():
-        print(f"  {bin_name}: {len(idxs)} patients — {[patient_dirs[i][0].name for i in idxs]}")
+        print(f"  {bin_name}: {len(idxs)} patients")
 
-    # Shuffle each bin
-    for bin_name in bins:
-        random.shuffle(bins[bin_name])
-
-    # Assign patients to folds round-robin within each bin
-    folds = [[] for _ in range(n_folds)]
+    # Shuffle each bin and assign round-robin to folds
+    common_folds = [[] for _ in range(n_folds)]
     for bin_name, idxs in bins.items():
+        random.shuffle(idxs)
         for i, idx in enumerate(idxs):
-            folds[i % n_folds].append(idx)
+            common_folds[i % n_folds].append(idx)
+
+    # Combine rare and common folds
+    folds = [rare_folds[i] + common_folds[i] for i in range(n_folds)]
+
+    print(f"\nFold sizes: {[len(f) for f in folds]}")
 
     # Build train/val splits
     splits = []
