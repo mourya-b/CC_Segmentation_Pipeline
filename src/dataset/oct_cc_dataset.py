@@ -3,20 +3,27 @@ import torch
 from torch.utils.data import Dataset
 from pathlib import Path
 from src.utils.io import load_segmentation, extract_cc_mask
+from src.utils.masking import make_donut_mask
 import pydicom
 
 
 class OCTFrameDataset(Dataset):
-    def __init__(self, dicom_dir, patient_dirs, negative_frames_map=None, transform=None):
+    def __init__(self, dicom_dir, patient_dirs, negative_frames_map=None, transform=None,
+                 mask_inner_frac=0.08, mask_outer_frac=0.45):
         """
         dicom_dir: Path to directory containing {PatientID}.dcm files
         patient_dirs: list of Path objects pointing to each patient folder (for nii files)
         negative_frames_map: dict mapping patient_id to list of negative frame indices (0-indexed)
         transform: albumentations transform pipeline
+        mask_inner_frac: inner radius of donut mask (fraction of min(H, W) / 2)
+        mask_outer_frac: outer radius of donut mask (fraction of min(H, W) / 2)
         """
         self.transform = transform
         self.samples = []
         self.volume_cache = {}
+        self.mask_inner_frac = mask_inner_frac
+        self.mask_outer_frac = mask_outer_frac
+        self._cached_mask = None
         negative_frames_map = negative_frames_map or {}
         dicom_dir = Path(dicom_dir)
 
@@ -54,6 +61,12 @@ class OCTFrameDataset(Dataset):
             self.volume_cache[key] = dcm.pixel_array  # (N, H, W, 3)
         return self.volume_cache[key]
 
+    def _get_mask(self, h, w):
+        if self._cached_mask is None or self._cached_mask.shape[:2] != (h, w):
+            mask_2d = make_donut_mask(h, w, self.mask_inner_frac, self.mask_outer_frac)
+            self._cached_mask = mask_2d[..., None]  # (H, W, 1) for broadcasting over RGB
+        return self._cached_mask
+
     def __len__(self):
         return len(self.samples)
 
@@ -62,6 +75,9 @@ class OCTFrameDataset(Dataset):
 
         volume = self._load_volume(dcm_path)
         image = volume[frame_idx]  # (H, W, 3) already RGB
+
+        mask = self._get_mask(image.shape[0], image.shape[1])
+        image = (image * mask).astype(image.dtype)
 
         if self.transform:
             augmented = self.transform(image=image)
