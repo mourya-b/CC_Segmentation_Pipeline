@@ -8,7 +8,7 @@ data:
   image_size: 512
 
 model:
-  backbone: "resnet50"
+  backbone: "efficientnet_b0"
   num_classes: 2
   pretrained: true
 
