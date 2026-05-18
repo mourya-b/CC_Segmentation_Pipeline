@@ -5,10 +5,10 @@ data:
     - base_dir: "/data/diag/mouryaBandaru/data/ORANGE_segmentations"
       dicom_dir: "/data/diag/rubenvdw/Dataset/ORANGE_Dicoms"
   annotation_excel: "/data/diag/mouryaBandaru/data/CC_Annotations_v3.xlsx"
-  image_size: 704
+  image_size: 512
 
 model:
-  backbone: "efficientnet_b0"
+  backbone: "resnet50"
   num_classes: 2
   pretrained: true
 
@@ -42,4 +42,4 @@ loss:
   gamma: 2.0
   alpha: 0.75
 
-output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v12"
+output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v15"

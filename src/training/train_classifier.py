@@ -90,55 +90,49 @@ def build_dataset(patient_dirs_with_dicoms, negative_frames_map, transform):
 
 
 def freeze_backbone(model):
+    """Freeze all layers except the classifier head."""
+    head_names = model.get_head_param_names()
     for name, param in model.model.named_parameters():
-        if "classifier" not in name:
+        if any(h in name for h in head_names):
+            param.requires_grad = True
+        else:
             param.requires_grad = False
-    print("Backbone frozen — training classifier head only.")
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Backbone frozen — training head only. Trainable params: {trainable:,}")
 
 
-def unfreeze_last_blocks(model, num_blocks=7):
-    """Unfreeze last N blocks. If num_blocks >= total blocks, unfreeze all."""
+def unfreeze_last_blocks(model, num_blocks=3):
+    """Unfreeze last N backbone layers + head."""
+    # Freeze everything first
     for param in model.model.parameters():
         param.requires_grad = False
 
-    # Always unfreeze classifier head
-    for param in model.model.classifier.parameters():
-        param.requires_grad = True
-
-    # Unfreeze conv_head and bn2
-    for param in model.model.conv_head.parameters():
-        param.requires_grad = True
-    for param in model.model.bn2.parameters():
-        param.requires_grad = True
-
-    # Unfreeze blocks
-    blocks = list(model.model.blocks.children())
-    total_blocks = len(blocks)
-    blocks_to_unfreeze = blocks[-num_blocks:] if num_blocks < total_blocks else blocks
-    for block in blocks_to_unfreeze:
-        for param in block.parameters():
+    # Unfreeze head
+    head_names = model.get_head_param_names()
+    for name, param in model.model.named_parameters():
+        if any(h in name for h in head_names):
             param.requires_grad = True
 
-    # If unfreezing all, also unfreeze conv_stem and bn1
-    if num_blocks >= total_blocks:
-        for param in model.model.conv_stem.parameters():
-            param.requires_grad = True
-        for param in model.model.bn1.parameters():
+    # Unfreeze last N backbone layers
+    layers = model.get_backbone_layers()
+    total = len(layers)
+    for layer in layers[-num_blocks:]:
+        for param in layer.parameters():
             param.requires_grad = True
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    blocks_unfrozen = min(num_blocks, total_blocks)
-    print(f"Unfroze {blocks_unfrozen}/{total_blocks} blocks + head. Trainable params: {trainable:,}")
+    print(f"Unfroze last {min(num_blocks, total)}/{total} blocks + head. Trainable params: {trainable:,}")
 
 
 def get_optimizer(model, config, backbone_lr_scale=0.1):
     base_lr = config["training"]["learning_rate"]
     wd = config["training"].get("weight_decay", 1e-4)
+    head_names = model.get_head_param_names()
 
     head_params = [p for n, p in model.model.named_parameters()
-                   if p.requires_grad and "classifier" in n]
+                   if p.requires_grad and any(h in n for h in head_names)]
     backbone_params = [p for n, p in model.model.named_parameters()
-                       if p.requires_grad and "classifier" not in n]
+                       if p.requires_grad and not any(h in n for h in head_names)]
 
     param_groups = [
         {"params": head_params, "lr": base_lr},
