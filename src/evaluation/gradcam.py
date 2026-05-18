@@ -6,14 +6,12 @@ sys.path.insert(0, '/data/diag/mouryaBandaru/CC_Segmentation_Pipeline')
 import torch
 import numpy as np
 import cv2
-import os
 import argparse
 from torch.utils.data import DataLoader
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 from src.models.classifier import CCClassifier
-from src.dataset.oct_cc_dataset import OCTFrameDataset
 from src.utils.io import load_annotation_excel
 
 
@@ -42,21 +40,17 @@ class GradCAM:
         score = output[0, class_idx]
         score.backward()
 
-        # Pool gradients
         weights = self.gradients.mean(dim=(2, 3), keepdim=True)
         cam = (weights * self.activations).sum(dim=1, keepdim=True)
         cam = torch.relu(cam)
         cam = cam.squeeze().cpu().numpy()
 
-        # Normalise
         cam = cv2.resize(cam, (input_tensor.shape[3], input_tensor.shape[2]))
         cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
         return cam, torch.softmax(output, dim=1)[0, 1].item()
 
 
 def overlay_cam(image_np, cam, alpha=0.4):
-    """Overlay CAM heatmap on original image."""
-    # image_np: HxWx3 uint8
     heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
     heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
     overlay = (alpha * heatmap + (1 - alpha) * image_np).astype(np.uint8)
@@ -64,10 +58,8 @@ def overlay_cam(image_np, cam, alpha=0.4):
 
 
 def get_target_layer(model):
-    """Get the last convolutional layer for Grad-CAM."""
     backbone = model.backbone_name
     if "efficientnet" in backbone:
-        # Last block of EfficientNet
         blocks = list(model.model.blocks.children())
         return blocks[-1]
     elif "resnet" in backbone:
@@ -81,7 +73,7 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--config", default="configs/train_classifier_cluster.yaml")
     parser.add_argument("--output_dir", default="/data/diag/mouryaBandaru/gradcam_outputs")
-    parser.add_argument("--n_samples", type=int, default=20)
+    parser.add_argument("--n_samples", type=int, default=10)
     args = parser.parse_args()
 
     import yaml
@@ -93,8 +85,8 @@ def main():
 
     # Load checkpoint
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    val_patients = checkpoint.get("val_patients", [])
-    print(f"Val patients: {val_patients}")
+    print(f"Checkpoint epoch: {checkpoint.get('epoch', '?')}")
+    print(f"Val loss: {checkpoint.get('val_loss', '?')}")
 
     # Load model
     model = CCClassifier(
@@ -110,15 +102,14 @@ def main():
     target_layer = get_target_layer(model)
     gradcam = GradCAM(model, target_layer)
 
-    # Load data
+    # Load all patients
     excel_path = cfg["data"]["annotation_excel"]
     patient_ids, cc_frames_map, negative_frames_map = load_annotation_excel(excel_path)
 
-    # Build val dataset
     from src.training.train_classifier import get_patient_dirs, build_dataset
     sources = cfg["data"]["sources"]
     all_dirs = get_patient_dirs(sources, patient_ids)
-    val_dirs = [(p, d) for p, d in all_dirs if p.name in val_patients]
+    print(f"Using all {len(all_dirs)} usable patients for GradCAM")
 
     image_size = cfg["data"].get("image_size", 512)
     transform = A.Compose([
@@ -127,8 +118,8 @@ def main():
         ToTensorV2(),
     ])
 
-    val_set = build_dataset(val_dirs, negative_frames_map, transform)
-    loader = DataLoader(val_set, batch_size=1, shuffle=False, num_workers=0)
+    dataset = build_dataset(all_dirs, negative_frames_map, transform)
+    loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=0)
 
     # Output dirs
     out_correct = Path(args.output_dir) / "correct_positives"
@@ -139,45 +130,40 @@ def main():
     correct_count = 0
     wrong_count = 0
 
-    print(f"\nGenerating Grad-CAM for {args.n_samples} correct and {args.n_samples} wrong positives...")
+    print(f"\nGenerating GradCAM for {args.n_samples} correct and {args.n_samples} wrong positives...")
 
-    for i, (image, label) in enumerate(loader):
+    for images, labels in loader:
         if correct_count >= args.n_samples and wrong_count >= args.n_samples:
             break
 
-        label_val = label.item()
-        if label_val != 1:  # only process positives
+        if labels.item() != 1:
             continue
 
-        image = image.to(device)
-        cam, prob = gradcam.generate(image, class_idx=1)
+        images = images.to(device)
+        cam, prob = gradcam.generate(images, class_idx=1)
         pred = 1 if prob > 0.5 else 0
 
-        # Denormalise image for saving
-        img_np = image.squeeze().cpu().numpy().transpose(1, 2, 0)
+        # Denormalise
+        img_np = images.squeeze().cpu().numpy().transpose(1, 2, 0)
         mean = np.array([0.485, 0.456, 0.406])
         std = np.array([0.229, 0.224, 0.225])
         img_np = (img_np * std + mean) * 255
         img_np = np.clip(img_np, 0, 255).astype(np.uint8)
 
         overlay = overlay_cam(img_np, cam)
+        combined = np.concatenate([img_np, overlay], axis=1)
 
         if pred == 1 and correct_count < args.n_samples:
-            # Correctly classified positive
             save_path = out_correct / f"sample_{correct_count:03d}_prob{prob:.2f}.png"
-            combined = np.concatenate([img_np, overlay], axis=1)
             cv2.imwrite(str(save_path), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
             correct_count += 1
         elif pred == 0 and wrong_count < args.n_samples:
-            # Wrongly classified positive (false negative)
             save_path = out_wrong / f"sample_{wrong_count:03d}_prob{prob:.2f}.png"
-            combined = np.concatenate([img_np, overlay], axis=1)
             cv2.imwrite(str(save_path), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
             wrong_count += 1
 
     print(f"\nSaved {correct_count} correct positives to {out_correct}")
-    print(f"Saved {wrong_count} wrong positives (false negatives) to {out_wrong}")
-    print(f"Output dir: {args.output_dir}")
+    print(f"Saved {wrong_count} wrong positives to {out_wrong}")
 
 
 if __name__ == "__main__":
