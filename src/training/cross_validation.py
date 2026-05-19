@@ -91,7 +91,8 @@ def stratified_kfold_patients(patient_dirs, cc_frames_map, n_folds=5, seed=42):
 
 
 def train_fold(config, train_patient_dirs, val_patient_dirs, negative_frames_map,
-               device, fold_idx, output_dir, seg_weight, use_aux_seg, mask_cfg):
+               device, fold_idx, output_dir,
+               seg_weight, use_aux_seg, seg_target_mode, seg_loss_type, mask_cfg):
     image_size = config["data"].get("image_size", 512)
 
     train_set = build_dataset(train_patient_dirs, negative_frames_map,
@@ -139,14 +140,16 @@ def train_fold(config, train_patient_dirs, val_patient_dirs, negative_frames_map
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=total_epochs - freeze_epochs, eta_min=1e-7
             )
-            epochs_no_improve = 0  # reset so phase 1 staleness doesn't bleed in
+            epochs_no_improve = 0
             phase = 2
 
         tr_loss, tr_cls, tr_seg, tr_acc = train_one_epoch(
-            model, train_loader, optimizer, device, seg_weight, use_aux_seg
+            model, train_loader, optimizer, device,
+            seg_weight, use_aux_seg, seg_target_mode, seg_loss_type,
         )
         vl_loss, vl_cls, vl_seg, vl_auc, _, _ = evaluate(
-            model, val_loader, device, seg_weight, use_aux_seg
+            model, val_loader, device,
+            seg_weight, use_aux_seg, seg_target_mode, seg_loss_type,
         )
 
         if phase == 1:
@@ -197,10 +200,14 @@ def main():
     all_patient_dirs = get_patient_dirs(sources, patient_ids)
     print(f"Found {len(all_patient_dirs)} usable patients")
 
-    use_aux_seg = config.get("loss", {}).get("use_aux_seg", True)
-    seg_weight = config.get("loss", {}).get("seg_weight", 0.3)
+    loss_cfg = config.get("loss", {})
+    use_aux_seg = loss_cfg.get("use_aux_seg", True)
+    seg_weight = loss_cfg.get("seg_weight", 1.0)
+    seg_target_mode = loss_cfg.get("seg_target_mode", "soft")
+    seg_loss_type = loss_cfg.get("seg_loss_type", "dice_bce")
     mask_cfg = config.get("mask", {"inner_frac": 0.08, "outer_frac": 0.45})
-    print(f"Aux seg head: {use_aux_seg}, seg_weight: {seg_weight}")
+    print(f"Aux seg head: {use_aux_seg} | seg_weight: {seg_weight} | "
+          f"target: {seg_target_mode} | loss: {seg_loss_type}")
 
     cv_cfg = config.get("cv", {})
     n_folds = cv_cfg.get("n_folds", 5)
@@ -232,14 +239,15 @@ def main():
         checkpoint_path, val_loader, model = train_fold(
             config, train_patient_dirs, val_patient_dirs,
             negative_frames_map, device, fold_idx + 1, output_dir,
-            seg_weight, use_aux_seg, mask_cfg,
+            seg_weight, use_aux_seg, seg_target_mode, seg_loss_type, mask_cfg,
         )
 
         ckpt = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
 
         _, _, _, auc, probs, labels = evaluate(
-            model, val_loader, device, seg_weight, use_aux_seg
+            model, val_loader, device,
+            seg_weight, use_aux_seg, seg_target_mode, seg_loss_type,
         )
         preds = (probs > 0.5).astype(int)
 

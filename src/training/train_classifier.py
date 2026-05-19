@@ -142,18 +142,51 @@ def get_optimizer(model, config, backbone_lr_scale=0.1):
     return torch.optim.Adam(param_groups, weight_decay=wd)
 
 
-def compute_losses(cls_logits, seg_logits, masks, labels, seg_weight, use_aux_seg):
+def dice_loss(logits, targets, smooth=1.0):
+    """Dice loss for sparse binary segmentation targets."""
+    probs = torch.sigmoid(logits)
+    probs_flat = probs.flatten(1)
+    targets_flat = targets.flatten(1)
+    intersection = (probs_flat * targets_flat).sum(dim=1)
+    union = probs_flat.sum(dim=1) + targets_flat.sum(dim=1)
+    dice = (2 * intersection + smooth) / (union + smooth)
+    return 1 - dice.mean()
+
+
+def compute_losses(cls_logits, seg_logits, masks, labels, seg_weight, use_aux_seg,
+                   seg_target_mode="soft", seg_loss_type="dice_bce"):
+    """
+    seg_target_mode: "soft"   — pass downsampled mask as float in [0,1]
+                     "binary" — threshold to {0,1}
+    seg_loss_type:   "bce"      — BCE only
+                     "dice"     — Dice only
+                     "dice_bce" — 0.5*BCE + 0.5*Dice
+    """
     cls_loss = F.binary_cross_entropy_with_logits(cls_logits, labels)
 
     if use_aux_seg and seg_logits is not None:
-        # Downsample mask to seg_logits resolution
         target = F.interpolate(
-            masks.unsqueeze(1),                 # (B, 1, H, W)
-            size=seg_logits.shape[-2:],         # e.g. (16, 16)
+            masks.unsqueeze(1),
+            size=seg_logits.shape[-2:],
             mode="area",
         )
-        target = (target > 0).float()
-        seg_loss = F.binary_cross_entropy_with_logits(seg_logits, target)
+        if seg_target_mode == "binary":
+            target = (target > 0).float()
+        else:
+            target = target.clamp(0.0, 1.0)
+
+        if seg_loss_type == "bce":
+            seg_loss = F.binary_cross_entropy_with_logits(seg_logits, target)
+        elif seg_loss_type == "dice":
+            dice_target = (target > 0).float()
+            seg_loss = dice_loss(seg_logits, dice_target)
+        elif seg_loss_type == "dice_bce":
+            bce_seg = F.binary_cross_entropy_with_logits(seg_logits, target)
+            dice_target = (target > 0).float()
+            dice_seg = dice_loss(seg_logits, dice_target)
+            seg_loss = 0.5 * bce_seg + 0.5 * dice_seg
+        else:
+            raise ValueError(f"Unknown seg_loss_type: {seg_loss_type}")
     else:
         seg_loss = torch.tensor(0.0, device=cls_logits.device)
 
@@ -161,7 +194,8 @@ def compute_losses(cls_logits, seg_logits, masks, labels, seg_weight, use_aux_se
     return total, cls_loss.detach(), seg_loss.detach()
 
 
-def train_one_epoch(model, loader, optimizer, device, seg_weight, use_aux_seg):
+def train_one_epoch(model, loader, optimizer, device, seg_weight, use_aux_seg,
+                    seg_target_mode, seg_loss_type):
     model.train()
     total_loss = total_cls = total_seg = 0.0
     correct = total = 0
@@ -173,8 +207,12 @@ def train_one_epoch(model, loader, optimizer, device, seg_weight, use_aux_seg):
 
         optimizer.zero_grad()
         cls_logits, seg_logits = model(images)
-        loss, cls_l, seg_l = compute_losses(cls_logits, seg_logits, masks, labels,
-                                            seg_weight, use_aux_seg)
+        loss, cls_l, seg_l = compute_losses(
+            cls_logits, seg_logits, masks, labels,
+            seg_weight, use_aux_seg,
+            seg_target_mode=seg_target_mode,
+            seg_loss_type=seg_loss_type,
+        )
         loss.backward()
         optimizer.step()
 
@@ -189,7 +227,8 @@ def train_one_epoch(model, loader, optimizer, device, seg_weight, use_aux_seg):
     return total_loss / n, total_cls / n, total_seg / n, correct / total
 
 
-def evaluate(model, loader, device, seg_weight, use_aux_seg):
+def evaluate(model, loader, device, seg_weight, use_aux_seg,
+             seg_target_mode, seg_loss_type):
     model.eval()
     total_loss = total_cls = total_seg = 0.0
     all_probs, all_labels = [], []
@@ -201,8 +240,12 @@ def evaluate(model, loader, device, seg_weight, use_aux_seg):
             labels = labels.to(device, non_blocking=True)
 
             cls_logits, seg_logits = model(images)
-            loss, cls_l, seg_l = compute_losses(cls_logits, seg_logits, masks, labels,
-                                                seg_weight, use_aux_seg)
+            loss, cls_l, seg_l = compute_losses(
+                cls_logits, seg_logits, masks, labels,
+                seg_weight, use_aux_seg,
+                seg_target_mode=seg_target_mode,
+                seg_loss_type=seg_loss_type,
+            )
             total_loss += loss.item()
             total_cls += cls_l.item()
             total_seg += seg_l.item()
@@ -272,9 +315,13 @@ def main():
                             shuffle=False, num_workers=config["training"].get("num_workers", 0),
                             pin_memory=True)
 
-    use_aux_seg = config.get("loss", {}).get("use_aux_seg", True)
-    seg_weight = config.get("loss", {}).get("seg_weight", 0.3)
-    print(f"Aux seg head: {use_aux_seg}, seg_weight: {seg_weight}")
+    loss_cfg = config.get("loss", {})
+    use_aux_seg = loss_cfg.get("use_aux_seg", True)
+    seg_weight = loss_cfg.get("seg_weight", 1.0)
+    seg_target_mode = loss_cfg.get("seg_target_mode", "soft")
+    seg_loss_type = loss_cfg.get("seg_loss_type", "dice_bce")
+    print(f"Aux seg head: {use_aux_seg} | seg_weight: {seg_weight} | "
+          f"target: {seg_target_mode} | loss: {seg_loss_type}")
 
     model = CCClassifier(
         backbone=config["model"]["backbone"],
@@ -294,7 +341,7 @@ def main():
         weight_decay=config["training"].get("weight_decay", 1e-4),
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="max", patience=5, factor=0.5  # mode='max' since we track AUC
+        optimizer, mode="max", patience=5, factor=0.5
     )
 
     output_dir = Path(config["output_dir"])
@@ -318,10 +365,12 @@ def main():
             phase = 2
 
         tr_loss, tr_cls, tr_seg, tr_acc = train_one_epoch(
-            model, train_loader, optimizer, device, seg_weight, use_aux_seg
+            model, train_loader, optimizer, device,
+            seg_weight, use_aux_seg, seg_target_mode, seg_loss_type,
         )
         vl_loss, vl_cls, vl_seg, vl_auc, _, _ = evaluate(
-            model, val_loader, device, seg_weight, use_aux_seg
+            model, val_loader, device,
+            seg_weight, use_aux_seg, seg_target_mode, seg_loss_type,
         )
 
         if phase == 1:

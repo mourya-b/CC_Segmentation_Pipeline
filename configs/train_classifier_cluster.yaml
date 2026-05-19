@@ -31,12 +31,20 @@ training:
     - "NLD-ISALA-0012"
     - "ABW-ARU-0013"
 
+cv:
+  n_folds: 5
+  pin_to_train:
+    - "NLD-TERG-0002"
+    - "NLD-UMCG-0001-LAD"
+
 mask:
   inner_frac: 0.08
   outer_frac: 0.45
 
 loss:
   use_aux_seg: true
-  seg_weight: 0.3
+  seg_weight: 1.0
+  seg_target_mode: "soft"
+  seg_loss_type: "dice_bce"
 
-output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v17"
+output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v18"
