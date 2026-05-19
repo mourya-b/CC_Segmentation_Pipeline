@@ -75,7 +75,7 @@ def overlay_cam(image_np, cam, alpha=0.4):
 def denormalize(tensor):
     mean = np.array([0.485, 0.456, 0.406])
     std  = np.array([0.229, 0.224, 0.225])
-    img = tensor.squeeze().cpu().numpy().transpose(1, 2, 0)
+    img = tensor.detach().squeeze().cpu().numpy().transpose(1, 2, 0)
     img = (img * std + mean) * 255
     return np.clip(img, 0, 255).astype(np.uint8)
 
