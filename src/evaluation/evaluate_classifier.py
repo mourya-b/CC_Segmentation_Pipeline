@@ -17,7 +17,6 @@ from src.utils.io import load_annotation_excel
 
 
 def get_val_patient_dirs(sources, val_patient_names):
-    """Find val patient dirs and their corresponding dicom_dir across all sources."""
     results = []
     for pid in val_patient_names:
         pid = str(pid).strip()
@@ -39,8 +38,7 @@ def get_val_patient_dirs(sources, val_patient_names):
     return results
 
 
-def build_val_dataset(val_patient_dirs_with_dicoms, negative_frames_map, transform):
-    """Build val dataset handling multiple dicom sources."""
+def build_val_dataset(val_patient_dirs_with_dicoms, negative_frames_map, transform, mask_cfg):
     groups = {}
     for patient_dir, dicom_dir in val_patient_dirs_with_dicoms:
         key = str(dicom_dir)
@@ -55,6 +53,8 @@ def build_val_dataset(val_patient_dirs_with_dicoms, negative_frames_map, transfo
             patient_dirs=group["patient_dirs"],
             negative_frames_map=negative_frames_map,
             transform=transform,
+            mask_inner_frac=mask_cfg.get("inner_frac", 0.08),
+            mask_outer_frac=mask_cfg.get("outer_frac", 0.45),
         )
         datasets.append(ds)
 
@@ -72,7 +72,6 @@ def main():
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
-    # Load checkpoint first to get val patients
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint = torch.load(args.checkpoint, map_location=device)
 
@@ -83,16 +82,19 @@ def main():
 
     print(f"Val patients from checkpoint: {val_patient_names}")
 
-    # Load annotations
+    # Read mask + aux config from the saved training config if available
+    saved_cfg = checkpoint.get("config", {})
+    mask_cfg = saved_cfg.get("mask", cfg.get("mask", {"inner_frac": 0.08, "outer_frac": 0.45}))
+    use_aux_seg = saved_cfg.get("loss", {}).get("use_aux_seg", True)
+    print(f"Mask config: {mask_cfg} | use_aux_seg: {use_aux_seg}")
+
     patient_ids, cc_frames_map, negative_frames_map = load_annotation_excel(
         cfg["data"]["annotation_excel"]
     )
 
-    # Find val patient dirs across all sources
     sources = cfg["data"]["sources"]
     val_patient_dirs = get_val_patient_dirs(sources, val_patient_names)
 
-    # Build val transform
     image_size = cfg["data"].get("image_size", 512)
     val_transform = Compose([
         Resize(image_size, image_size),
@@ -100,7 +102,7 @@ def main():
         ToTensorV2(),
     ])
 
-    val_set = build_val_dataset(val_patient_dirs, negative_frames_map, val_transform)
+    val_set = build_val_dataset(val_patient_dirs, negative_frames_map, val_transform, mask_cfg)
 
     val_loader = DataLoader(
         val_set,
@@ -112,27 +114,29 @@ def main():
     # Load model
     model = CCClassifier(
         backbone=cfg["model"]["backbone"],
-        num_classes=cfg["model"]["num_classes"],
-        pretrained=False
+        pretrained=False,
+        use_aux_seg=use_aux_seg,
     )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
     model.eval()
 
+    val_auc = checkpoint.get("val_auc", float("nan"))
+    val_loss = checkpoint.get("val_loss", float("nan"))
     print(f"Evaluating checkpoint from epoch {checkpoint.get('epoch', '?')} "
-          f"| Val loss: {checkpoint.get('val_loss', '?'):.4f}")
+          f"| Best val AUC: {val_auc:.4f} | Val loss: {val_loss:.4f}")
 
     all_preds, all_probs, all_labels = [], [], []
 
     with torch.no_grad():
-        for images, labels in val_loader:
+        for images, masks, labels in val_loader:
             images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            probs = torch.softmax(outputs, dim=1)[:, 1]
-            preds = outputs.argmax(dim=1)
+            cls_logits, _ = model(images)
+            probs = torch.sigmoid(cls_logits)
+            preds = (probs > 0.5).long()
             all_preds.extend(preds.cpu().numpy())
             all_probs.extend(probs.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+            all_labels.extend(labels.long().cpu().numpy())
 
     all_preds = np.array(all_preds)
     all_probs = np.array(all_probs)

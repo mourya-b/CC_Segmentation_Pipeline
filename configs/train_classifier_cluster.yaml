@@ -9,7 +9,6 @@ data:
 
 model:
   backbone: "efficientnet_b0"
-  num_classes: 2
   pretrained: true
 
 training:
@@ -23,6 +22,7 @@ training:
   freeze_epochs: 10
   unfreeze_blocks: 3
   backbone_lr_scale: 0.1
+  num_workers: 0
   val_patients:
     - "NLD-RADB-0060"
     - "NLD-AZN-0009"
@@ -31,15 +31,12 @@ training:
     - "NLD-ISALA-0012"
     - "ABW-ARU-0013"
 
-cv:
-  n_folds: 5
-  pin_to_train:
-    - "NLD-TERG-0002"
-    - "NLD-UMCG-0001-LAD"
+mask:
+  inner_frac: 0.08
+  outer_frac: 0.45
 
 loss:
-  type: "focal"
-  gamma: 2.0
-  alpha: 0.75
+  use_aux_seg: true
+  seg_weight: 0.3
 
-output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v16"
+output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v17"

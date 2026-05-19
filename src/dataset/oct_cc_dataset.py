@@ -10,20 +10,13 @@ import pydicom
 class OCTFrameDataset(Dataset):
     def __init__(self, dicom_dir, patient_dirs, negative_frames_map=None, transform=None,
                  mask_inner_frac=0.08, mask_outer_frac=0.45):
-        """
-        dicom_dir: Path to directory containing {PatientID}.dcm files
-        patient_dirs: list of Path objects pointing to each patient folder (for nii files)
-        negative_frames_map: dict mapping patient_id to list of negative frame indices (0-indexed)
-        transform: albumentations transform pipeline
-        mask_inner_frac: inner radius of donut mask (fraction of min(H, W) / 2)
-        mask_outer_frac: outer radius of donut mask (fraction of min(H, W) / 2)
-        """
         self.transform = transform
         self.samples = []
         self.volume_cache = {}
+        self.seg_cache = {}
         self.mask_inner_frac = mask_inner_frac
         self.mask_outer_frac = mask_outer_frac
-        self._cached_mask = None
+        self._cached_donut = None
         negative_frames_map = negative_frames_map or {}
         dicom_dir = Path(dicom_dir)
 
@@ -61,11 +54,19 @@ class OCTFrameDataset(Dataset):
             self.volume_cache[key] = dcm.pixel_array  # (N, H, W, 3)
         return self.volume_cache[key]
 
-    def _get_mask(self, h, w):
-        if self._cached_mask is None or self._cached_mask.shape[:2] != (h, w):
+    def _load_cc_mask_volume(self, nii_path):
+        key = str(nii_path)
+        if key not in self.seg_cache:
+            seg = load_segmentation(nii_path)
+            cc_mask = extract_cc_mask(seg)  # (N, H, W) bool
+            self.seg_cache[key] = cc_mask.astype(np.float32)
+        return self.seg_cache[key]
+
+    def _get_donut(self, h, w):
+        if self._cached_donut is None or self._cached_donut.shape[:2] != (h, w):
             mask_2d = make_donut_mask(h, w, self.mask_inner_frac, self.mask_outer_frac)
-            self._cached_mask = mask_2d[..., None]  # (H, W, 1) for broadcasting over RGB
-        return self._cached_mask
+            self._cached_donut = mask_2d  # (H, W) float32
+        return self._cached_donut
 
     def __len__(self):
         return len(self.samples)
@@ -74,15 +75,28 @@ class OCTFrameDataset(Dataset):
         dcm_path, nii_path, frame_idx, label = self.samples[idx]
 
         volume = self._load_volume(dcm_path)
-        image = volume[frame_idx]  # (H, W, 3) already RGB
+        image = volume[frame_idx]                          # (H, W, 3) uint8
 
-        mask = self._get_mask(image.shape[0], image.shape[1])
-        image = (image * mask).astype(image.dtype)
+        cc_vol = self._load_cc_mask_volume(nii_path)
+        mask = cc_vol[frame_idx]                           # (H, W) float32
+
+        # Apply donut to both
+        donut = self._get_donut(image.shape[0], image.shape[1])
+        image = (image * donut[..., None]).astype(image.dtype)
+        mask = mask * donut
 
         if self.transform:
-            augmented = self.transform(image=image)
+            augmented = self.transform(image=image, mask=mask)
             image = augmented["image"]
+            mask = augmented["mask"]
         else:
             image = torch.tensor(image.transpose(2, 0, 1), dtype=torch.float32) / 255.0
+            mask = torch.tensor(mask, dtype=torch.float32)
 
-        return image, torch.tensor(label, dtype=torch.long)
+        # Ensure mask is a float tensor (albumentations may keep it numpy if no ToTensorV2 path)
+        if not isinstance(mask, torch.Tensor):
+            mask = torch.tensor(mask, dtype=torch.float32)
+        else:
+            mask = mask.float()
+
+        return image, mask, torch.tensor(label, dtype=torch.float32)
