@@ -12,7 +12,7 @@ model:
   pretrained: true
 
 training:
-  epochs: 60
+  epochs: 80
   batch_size: 16
   learning_rate: 0.0001
   val_split: 0.2
@@ -47,4 +47,4 @@ loss:
   seg_target_mode: "soft"
   seg_loss_type: "dice_bce"
 
-output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v18"
+output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v18b"

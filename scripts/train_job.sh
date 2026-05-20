@@ -10,10 +10,10 @@
 #SBATCH --container-image="dockerdex.umcn.nl:5005#mourya-b/cc_segmentation_pipeline:v1.2"
 #SBATCH --container-mounts="/data/diag:/data/diag"
 #SBATCH --container-workdir="/data/diag/mouryaBandaru/CC_Segmentation_Pipeline"
-#SBATCH --output=/data/diag/mouryaBandaru/experiments/classifier_v17/logs/%j.out
-#SBATCH --error=/data/diag/mouryaBandaru/experiments/classifier_v17/logs/%j.err
+#SBATCH --output=/data/diag/mouryaBandaru/experiments/classifier_v18/logs/%j.out
+#SBATCH --error=/data/diag/mouryaBandaru/experiments/classifier_v18/logs/%j.err
 
-mkdir -p /data/diag/mouryaBandaru/experiments/classifier_v17/logs
+mkdir -p /data/diag/mouryaBandaru/experiments/classifier_v18/logs
 
 export PYTHONPATH=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline
 python src/training/train_classifier.py --config configs/train_classifier_cluster.yaml
