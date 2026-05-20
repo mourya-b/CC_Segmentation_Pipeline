@@ -16,3 +16,4 @@
 mkdir -p /data/diag/mouryaBandaru/experiments/classifier_v18b/logs
 export PYTHONPATH=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline
 python3 src/training/train_classifier.py --config configs/train_classifier_cluster.yaml
+#
