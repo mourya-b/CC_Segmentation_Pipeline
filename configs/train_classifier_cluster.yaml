@@ -1,9 +1,9 @@
 data:
   sources:
-    - base_dir: "/data/diag/mouryaBandaru/data/PECTUS_segmentations"
-      dicom_dir: "/data/diag/rubenvdw/Dataset/DICOMS_Pectus"
-    - base_dir: "/data/diag/mouryaBandaru/data/ORANGE_segmentations"
-      dicom_dir: "/data/diag/rubenvdw/Dataset/ORANGE_Dicoms"
+    - base_dir: "${SCRATCH_DIR}/PECTUS_segs"
+      dicom_dir: "${SCRATCH_DIR}/PECTUS_dicoms"
+    - base_dir: "${SCRATCH_DIR}/ORANGE_segs"
+      dicom_dir: "${SCRATCH_DIR}/ORANGE_dicoms"
   annotation_excel: "/data/diag/mouryaBandaru/data/CC_Annotations_v3.xlsx"
   image_size: 512
 
@@ -22,7 +22,7 @@ training:
   freeze_epochs: 10
   unfreeze_blocks: 3
   backbone_lr_scale: 0.1
-  num_workers: 0
+  num_workers: 4
   val_patients:
     - "NLD-RADB-0060"
     - "NLD-AZN-0009"
