@@ -18,16 +18,17 @@ ORANGE_DICOM_SRC=/data/diag/rubenvdw/Dataset/ORANGE_Dicoms
 PECTUS_SEG_SRC=/data/diag/mouryaBandaru/data/PECTUS_segmentations
 ORANGE_SEG_SRC=/data/diag/mouryaBandaru/data/ORANGE_segmentations
 
-# Scratch destination — node-local fast disk
-SCRATCH_DIR=${TMPDIR:-/tmp/oct_scratch}
+# /dev/shm is RAM-backed, fast, and 252GB on this node — no $TMPDIR ambiguity
+SCRATCH_DIR=/dev/shm/oct_${SLURM_JOB_ID}
 mkdir -p $SCRATCH_DIR/PECTUS_dicoms $SCRATCH_DIR/ORANGE_dicoms
 mkdir -p $SCRATCH_DIR/PECTUS_segs $SCRATCH_DIR/ORANGE_segs
 
 PATIENT_LIST=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline/scripts/patient_list.txt
 
-echo "==> Copying patients from $PATIENT_LIST at $(date)"
+echo "==> Host: $(hostname)"
 echo "==> Scratch dir: $SCRATCH_DIR"
-df -h $SCRATCH_DIR
+echo "==> Copying patients at $(date)"
+df -h /dev/shm
 
 copied_dcm=0; missing_dcm=0
 copied_seg=0; missing_seg=0
@@ -36,7 +37,6 @@ while IFS= read -r pid; do
     [ -z "$pid" ] && continue
     hospital=$(echo "$pid" | awk -F- '{print $1"-"$2}')
 
-    # DICOM — try PECTUS then ORANGE
     if [ -f "$PECTUS_DICOM_SRC/${pid}.dcm" ]; then
         cp "$PECTUS_DICOM_SRC/${pid}.dcm" "$SCRATCH_DIR/PECTUS_dicoms/" && copied_dcm=$((copied_dcm+1))
     elif [ -f "$ORANGE_DICOM_SRC/${pid}.dcm" ]; then
@@ -45,7 +45,6 @@ while IFS= read -r pid; do
         missing_dcm=$((missing_dcm+1))
     fi
 
-    # Segmentations — try PECTUS then ORANGE
     if [ -d "$PECTUS_SEG_SRC/$hospital/$pid" ]; then
         mkdir -p "$SCRATCH_DIR/PECTUS_segs/$hospital/$pid"
         cp -r "$PECTUS_SEG_SRC/$hospital/$pid/." "$SCRATCH_DIR/PECTUS_segs/$hospital/$pid/" && copied_seg=$((copied_seg+1))
@@ -60,13 +59,15 @@ done < "$PATIENT_LIST"
 
 echo "==> DICOMs: $copied_dcm copied, $missing_dcm missing"
 echo "==> Segs:   $copied_seg copied, $missing_seg missing"
+echo "==> Sample PECTUS_dicoms:"
+ls $SCRATCH_DIR/PECTUS_dicoms | head -3
 echo "==> Scratch usage:"
 du -sh $SCRATCH_DIR/PECTUS_dicoms $SCRATCH_DIR/ORANGE_dicoms
 echo "==> Copy complete at $(date)"
 
 srun --container-image="dockerdex.umcn.nl:5005#mourya-b/cc_segmentation_pipeline:v1.2" \
-     --container-mounts="/tmp:/tmp,/data/diag:/data/diag" \
+     --container-mounts="$SCRATCH_DIR:$SCRATCH_DIR,/data/diag:/data/diag" \
      --container-workdir="/data/diag/mouryaBandaru/CC_Segmentation_Pipeline" \
-     --container-env="PYTHONPATH=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline,SCRATCH_DIR=/tmp" \
+     --container-env="PYTHONPATH=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline,SCRATCH_DIR=$SCRATCH_DIR" \
      python3 /data/diag/mouryaBandaru/CC_Segmentation_Pipeline/src/training/train_classifier.py \
      --config /data/diag/mouryaBandaru/CC_Segmentation_Pipeline/configs/train_classifier_cluster_scratch.yaml
