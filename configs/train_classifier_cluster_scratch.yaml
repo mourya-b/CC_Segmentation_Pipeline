@@ -1,0 +1,50 @@
+data:
+  sources:
+    - base_dir: "${SCRATCH_DIR}/PECTUS_segs"
+      dicom_dir: "${SCRATCH_DIR}/PECTUS_dicoms"
+    - base_dir: "${SCRATCH_DIR}/ORANGE_segs"
+      dicom_dir: "${SCRATCH_DIR}/ORANGE_dicoms"
+  annotation_excel: "/data/diag/mouryaBandaru/data/CC_Annotations_v3.xlsx"
+  image_size: 512
+
+model:
+  backbone: "efficientnet_b0"
+  pretrained: true
+
+training:
+  epochs: 80
+  batch_size: 16
+  learning_rate: 0.0001
+  val_split: 0.2
+  seed: 42
+  weight_decay: 0.0001
+  early_stopping_patience: 11
+  freeze_epochs: 10
+  unfreeze_blocks: 3
+  backbone_lr_scale: 0.1
+  num_workers: 4
+  val_patients:
+    - "NLD-RADB-0060"
+    - "NLD-AZN-0009"
+    - "NLD-AZN-0014"
+    - "NL-RUMC-00033-1-1"
+    - "NLD-ISALA-0012"
+    - "ABW-ARU-0013"
+
+cv:
+  n_folds: 5
+  pin_to_train:
+    - "NLD-TERG-0002"
+    - "NLD-UMCG-0001-LAD"
+
+mask:
+  inner_frac: 0.08
+  outer_frac: 0.45
+
+loss:
+  use_aux_seg: true
+  seg_weight: 1.0
+  seg_target_mode: "soft"
+  seg_loss_type: "dice_bce"
+
+output_dir: "/data/diag/mouryaBandaru/experiments/classifier_v18b"

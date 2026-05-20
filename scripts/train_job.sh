@@ -61,13 +61,12 @@ done < "$PATIENT_LIST"
 echo "==> DICOMs: $copied_dcm copied, $missing_dcm missing"
 echo "==> Segs:   $copied_seg copied, $missing_seg missing"
 echo "==> Scratch usage:"
-du -sh $SCRATCH_DIR
+du -sh $SCRATCH_DIR/PECTUS_dicoms $SCRATCH_DIR/ORANGE_dicoms
 echo "==> Copy complete at $(date)"
-
-export PYTHONPATH=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline
 
 srun --container-image="dockerdex.umcn.nl:5005#mourya-b/cc_segmentation_pipeline:v1.2" \
      --container-mounts="$SCRATCH_DIR:$SCRATCH_DIR,/data/diag:/data/diag" \
      --container-workdir="/data/diag/mouryaBandaru/CC_Segmentation_Pipeline" \
-     python src/training/train_classifier.py \
-     --config configs/train_classifier_cluster_scratch.yaml
+     --container-env="PYTHONPATH=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline,SCRATCH_DIR=$SCRATCH_DIR" \
+     python3 /data/diag/mouryaBandaru/CC_Segmentation_Pipeline/src/training/train_classifier.py \
+     --config /data/diag/mouryaBandaru/CC_Segmentation_Pipeline/configs/train_classifier_cluster_scratch.yaml
