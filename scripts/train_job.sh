@@ -65,8 +65,8 @@ du -sh $SCRATCH_DIR/PECTUS_dicoms $SCRATCH_DIR/ORANGE_dicoms
 echo "==> Copy complete at $(date)"
 
 srun --container-image="dockerdex.umcn.nl:5005#mourya-b/cc_segmentation_pipeline:v1.2" \
-     --container-mounts="$SCRATCH_DIR:$SCRATCH_DIR,/data/diag:/data/diag" \
+     --container-mounts="/tmp:/tmp,/data/diag:/data/diag" \
      --container-workdir="/data/diag/mouryaBandaru/CC_Segmentation_Pipeline" \
-     --container-env="PYTHONPATH=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline,SCRATCH_DIR=$SCRATCH_DIR" \
+     --container-env="PYTHONPATH=/data/diag/mouryaBandaru/CC_Segmentation_Pipeline,SCRATCH_DIR=/tmp" \
      python3 /data/diag/mouryaBandaru/CC_Segmentation_Pipeline/src/training/train_classifier.py \
      --config /data/diag/mouryaBandaru/CC_Segmentation_Pipeline/configs/train_classifier_cluster_scratch.yaml
