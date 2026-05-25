@@ -2,8 +2,9 @@ import sys
 from pathlib import Path
 sys.path.insert(0, '/data/diag/mouryaBandaru/CC_Segmentation_Pipeline')
 
+import re
+import json
 import argparse
-import yaml
 import numpy as np
 import pandas as pd
 import torch
@@ -14,6 +15,7 @@ from sklearn.metrics import (
 )
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import yaml
 
 from src.models.classifier import CCClassifier
 from src.dataset.oct_cc_dataset import OCTFrameDataset
@@ -36,7 +38,7 @@ def get_val_patient_dirs(sources, val_patient_names):
                 results.append((patient_path, dicom_dir))
                 break
         else:
-            print(f"Warning: val patient {pid} not found in any source")
+            print(f"  Warning: val patient {pid} not found in any source")
     return results
 
 
@@ -76,12 +78,22 @@ def threshold_for_recall(probs, labels, target_recall=0.90):
     return float(thresholds[best_idx]), float(recall[best_idx]), float(precision[best_idx])
 
 
-def evaluate_checkpoint(checkpoint_path, cfg, device, output_csv_path, fold_label=""):
+def evaluate_checkpoint(checkpoint_path, cfg, device, output_csv_path,
+                        fold_label="", cv_splits=None, fold_num=None):
     checkpoint = torch.load(checkpoint_path, map_location=device)
 
+    # Priority 1: val_patients saved in checkpoint
     val_patient_names = checkpoint.get("val_patients", None)
+
+    # Priority 2: external cv_splits.json
+    if val_patient_names is None and cv_splits is not None and fold_num is not None:
+        val_patient_names = cv_splits.get(str(fold_num)) or cv_splits.get(fold_num)
+        if val_patient_names:
+            print(f"  Using val patients from cv_splits.json for fold {fold_num}")
+
     if val_patient_names is None:
-        print(f"ERROR: checkpoint {checkpoint_path} has no val_patients key — cannot evaluate.")
+        print(f"  ERROR: no val_patients for {checkpoint_path.name}. "
+              f"Run extract_cv_splits.py to generate cv_splits.json.")
         return None
 
     saved_cfg = checkpoint.get("config", {})
@@ -93,7 +105,7 @@ def evaluate_checkpoint(checkpoint_path, cfg, device, output_csv_path, fold_labe
     val_patient_dirs = get_val_patient_dirs(sources, val_patient_names)
 
     if not val_patient_dirs:
-        print(f"ERROR: no val patient dirs found for {fold_label}")
+        print(f"  ERROR: no val patient dirs found for {fold_label}")
         return None
 
     image_size = cfg["data"].get("image_size", 512)
@@ -124,8 +136,8 @@ def evaluate_checkpoint(checkpoint_path, cfg, device, output_csv_path, fold_labe
             cls_logits, _ = model(images)
             probs = torch.sigmoid(cls_logits).cpu().numpy()
             labels_np = labels.numpy().astype(int)
-            frame_idxs_np = np.array(frame_idxs) if not isinstance(frame_idxs, torch.Tensor) \
-                            else frame_idxs.numpy()
+            frame_idxs_np = frame_idxs.numpy() if isinstance(frame_idxs, torch.Tensor) \
+                            else np.array(frame_idxs)
 
             for pid, fidx, prob, lbl in zip(patient_ids_batch, frame_idxs_np, probs, labels_np):
                 records.append({
@@ -149,13 +161,13 @@ def evaluate_checkpoint(checkpoint_path, cfg, device, output_csv_path, fold_labe
     f1 = f1_score(all_labels, all_preds, zero_division=0)
 
     print(f"\n{'='*60}")
-    print(f"{fold_label}  |  checkpoint: {checkpoint_path.name}  |  epoch {checkpoint.get('epoch','?')}")
+    print(f"{fold_label}  |  epoch {checkpoint.get('epoch','?')}  |  saved AUC {checkpoint.get('val_auc', '?'):.4f}")
     print(f"  Val patients: {val_patient_names}")
     print(f"  Samples: {len(df)}  (pos {int(all_labels.sum())}, neg {int((1-all_labels).sum())})")
-    print(f"  AUC:       {auc:.4f}")
-    print(f"  Prec@0.5:  {prec:.4f}")
-    print(f"  Recall@0.5:{rec:.4f}")
-    print(f"  F1@0.5:    {f1:.4f}")
+    print(f"  AUC:        {auc:.4f}")
+    print(f"  Prec@0.5:   {prec:.4f}")
+    print(f"  Recall@0.5: {rec:.4f}")
+    print(f"  F1@0.5:     {f1:.4f}")
     print(f"  Threshold tuning:")
     for target in [0.85, 0.90, 0.95]:
         thr, r, p = threshold_for_recall(all_probs, all_labels, target)
@@ -176,8 +188,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/train_classifier_cluster.yaml")
     parser.add_argument("--exp-dir", required=True,
-                        help="Experiment dir. For CV: contains fold_N_best.pth files. "
-                             "For single: contains best_classifier.pth.")
+                        help="Experiment dir containing fold_N_best.pth files or best_classifier.pth")
     parser.add_argument("--output-dir", default=None,
                         help="Where to save prediction CSVs. Defaults to --exp-dir.")
     args = parser.parse_args()
@@ -191,23 +202,35 @@ def main():
     exp_dir = Path(args.exp_dir)
     output_dir = Path(args.output_dir) if args.output_dir else exp_dir
 
-    # Check for CV fold checkpoints (fold_1_best.pth, fold_2_best.pth, ...)
-    fold_ckpts = sorted(exp_dir.glob("fold_*_best.pth"))
+    # Load cv_splits.json if present
+    cv_splits = None
+    cv_splits_path = exp_dir / "cv_splits.json"
+    if cv_splits_path.exists():
+        with open(cv_splits_path) as f:
+            cv_splits = json.load(f)
+        print(f"Loaded CV splits from {cv_splits_path}")
+    else:
+        print(f"No cv_splits.json found in {exp_dir}. "
+              f"Checkpoints must contain val_patients key, or run extract_cv_splits.py first.")
 
-    # Fall back to single checkpoint
+    # Find fold checkpoints
+    fold_ckpts = sorted(exp_dir.glob("fold_*_best.pth"))
     if not fold_ckpts:
-        single_ckpt = exp_dir / "best_classifier.pth"
-        if single_ckpt.exists():
-            fold_ckpts = [single_ckpt]
-        else:
-            print(f"No checkpoints found in {exp_dir}")
-            return
+        single = exp_dir / "best_classifier.pth"
+        fold_ckpts = [single] if single.exists() else []
+
+    if not fold_ckpts:
+        print(f"No checkpoints found in {exp_dir}")
+        return
 
     summaries = []
     for ckpt_path in fold_ckpts:
-        fold_label = ckpt_path.stem.replace("_best", "").replace("best_classifier", "single")
+        fold_num_match = re.search(r"fold_(\d+)", ckpt_path.stem)
+        fold_num = int(fold_num_match.group(1)) if fold_num_match else None
+        fold_label = ckpt_path.stem.replace("_best", "")
         csv_path = output_dir / f"predictions_{fold_label}.csv"
-        s = evaluate_checkpoint(ckpt_path, cfg, device, csv_path, fold_label)
+        s = evaluate_checkpoint(ckpt_path, cfg, device, csv_path,
+                                fold_label=fold_label, cv_splits=cv_splits, fold_num=fold_num)
         if s:
             summaries.append(s)
 
@@ -225,7 +248,8 @@ def main():
         print(f"F1@0.5:     {np.mean(f1s):.4f} ± {np.std(f1s):.4f}")
         print(f"\nPer-fold:")
         for s in summaries:
-            print(f"  {s['fold_label']:20s} AUC {s['auc']:.4f}  n={s['n_samples']}  pos={s['n_pos']}")
+            print(f"  {s['fold_label']:20s} AUC {s['auc']:.4f}  "
+                  f"n={s['n_samples']}  pos={s['n_pos']}")
 
 
 if __name__ == "__main__":

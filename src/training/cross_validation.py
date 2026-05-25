@@ -169,6 +169,8 @@ def train_fold(config, train_patient_dirs, val_patient_dirs, negative_frames_map
                 "model_state_dict": model.state_dict(),
                 "val_auc": vl_auc,
                 "val_loss": vl_loss,
+                "val_patients": [p.name for p, _ in val_patient_dirs],
+                "config": config,
             }, checkpoint_path)
         else:
             epochs_no_improve += 1
