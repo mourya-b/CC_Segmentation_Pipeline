@@ -9,7 +9,7 @@ import pydicom
 
 class OCTFrameDataset(Dataset):
     def __init__(self, dicom_dir, patient_dirs, negative_frames_map=None, transform=None,
-                 mask_inner_frac=0.08, mask_outer_frac=0.45):
+                 mask_inner_frac=0.08, mask_outer_frac=0.45, return_metadata=False):
         self.transform = transform
         self.samples = []
         self.volume_cache = {}
@@ -17,6 +17,7 @@ class OCTFrameDataset(Dataset):
         self.mask_inner_frac = mask_inner_frac
         self.mask_outer_frac = mask_outer_frac
         self._cached_donut = None
+        self.return_metadata = return_metadata
         negative_frames_map = negative_frames_map or {}
         dicom_dir = Path(dicom_dir)
 
@@ -93,10 +94,13 @@ class OCTFrameDataset(Dataset):
             image = torch.tensor(image.transpose(2, 0, 1), dtype=torch.float32) / 255.0
             mask = torch.tensor(mask, dtype=torch.float32)
 
-        # Ensure mask is a float tensor (albumentations may keep it numpy if no ToTensorV2 path)
         if not isinstance(mask, torch.Tensor):
             mask = torch.tensor(mask, dtype=torch.float32)
         else:
             mask = mask.float()
+
+        if self.return_metadata:
+            patient_id = Path(dcm_path).stem  # "NLD-RADB-0060.dcm" -> "NLD-RADB-0060"
+            return image, mask, torch.tensor(label, dtype=torch.float32), patient_id, int(frame_idx)
 
         return image, mask, torch.tensor(label, dtype=torch.float32)
