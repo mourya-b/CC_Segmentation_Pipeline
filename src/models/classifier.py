@@ -1,18 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import timm
-
-
-class GeM(nn.Module):
-    """Generalized Mean Pooling — focuses on localized high-confidence regions."""
-    def __init__(self, p=3.0, eps=1e-6):
-        super().__init__()
-        self.p = nn.Parameter(torch.ones(1) * p)
-        self.eps = eps
-
-    def forward(self, x):
-        return F.adaptive_avg_pool2d(x.clamp(min=self.eps).pow(self.p), 1).pow(1.0 / self.p)
 
 
 class CCClassifier(nn.Module):
@@ -35,9 +23,9 @@ class CCClassifier(nn.Module):
         )
         feat_dim = self.encoder.num_features  # 1280 for B0, 2048 for ResNet50
 
-        # Classification head — GeM pooling + single logit, BCEWithLogitsLoss
+        # Classification head — single logit, use BCEWithLogitsLoss
         self.cls_head = nn.Sequential(
-            GeM(p=3.0),
+            nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             nn.Dropout(0.3),
             nn.Linear(feat_dim, 1),
