@@ -161,7 +161,8 @@ def train_fold(config, train_patient_dirs, val_patient_dirs, negative_frames_map
               f"| Train loss {tr_loss:.4f} (cls {tr_cls:.4f} seg {tr_seg:.4f}) acc {tr_acc:.4f} "
               f"| Val loss {vl_loss:.4f} (cls {vl_cls:.4f} seg {vl_seg:.4f}) AUC {vl_auc:.4f}")
 
-        if vl_auc > best_val_auc:
+        # Only checkpoint after backbone unfreezes — phase 1 AUC is unreliable
+        if phase == 2 and vl_auc > best_val_auc:
             best_val_auc = vl_auc
             epochs_no_improve = 0
             torch.save({
@@ -172,7 +173,7 @@ def train_fold(config, train_patient_dirs, val_patient_dirs, negative_frames_map
                 "val_patients": [p.name for p, _ in val_patient_dirs],
                 "config": config,
             }, checkpoint_path)
-        else:
+        elif phase == 2:
             epochs_no_improve += 1
             if epochs_no_improve >= patience:
                 print(f"  [Fold {fold_idx}] Early stopping at epoch {epoch+1}")

@@ -382,7 +382,8 @@ def main():
               f"| Train loss {tr_loss:.4f} (cls {tr_cls:.4f}, seg {tr_seg:.4f}) acc {tr_acc:.4f} "
               f"| Val loss {vl_loss:.4f} (cls {vl_cls:.4f}, seg {vl_seg:.4f}) AUC {vl_auc:.4f}")
 
-        if vl_auc > best_val_auc:
+        # Only checkpoint after backbone unfreezes — phase 1 AUC is unreliable
+        if phase == 2 and vl_auc > best_val_auc:
             best_val_auc = vl_auc
             epochs_no_improve = 0
             torch.save({
@@ -396,7 +397,7 @@ def main():
                 "config": config,
             }, output_dir / "best_classifier.pth")
             print(f"Model saved. Best val AUC: {best_val_auc:.4f}")
-        else:
+        elif phase == 2:
             epochs_no_improve += 1
 
         if epochs_no_improve >= patience:
